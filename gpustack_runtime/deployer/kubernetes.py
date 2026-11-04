@@ -51,6 +51,7 @@ from .__utils__ import (
     sensitive_env_var,
     validate_rfc1123_domain_name,
 )
+from .k8s import dra
 from .k8s.devicemanager import (
     KubernetesResourceInjectionPolicyEnum,
     get_resource_injection_policy,
@@ -569,6 +570,8 @@ def _apply_instance_type_admission(
 def _pin_pod_for_kueue(
     pod: kubernetes.client.V1Pod,
     node_name: str | None,
+    *,
+    force: bool = False,
 ) -> None:
     """
     Adjust node pinning for Kueue-gated Pods in place.
@@ -580,13 +583,28 @@ def _pin_pod_for_kueue(
     """
     if not node_name:
         return
-    if "kueue.x-k8s.io/queue-name" not in (pod.metadata.labels or {}):
+    if not force and "kueue.x-k8s.io/queue-name" not in (pod.metadata.labels or {}):
         return
     pod.spec.node_name = None
     pod.spec.node_selector = {
         **(pod.spec.node_selector or {}),
         "kubernetes.io/hostname": node_name,
     }
+
+
+def _is_device_request_key(resource_key: str) -> bool:
+    """
+    Report whether a resource key requests accelerators of a detected
+    backend, i.e. is mapped to a visible-devices env, is the auto-map key, or
+    is a backend resource key (e.g. "intel.com/devices").
+    """
+    return (
+        resource_key
+        in envs.GPUSTACK_RUNTIME_DEPLOY_RESOURCE_KEY_MAP_RUNTIME_VISIBLE_DEVICES
+        or resource_key == envs.GPUSTACK_RUNTIME_DEPLOY_AUTOMAP_RESOURCE_KEY
+        or resource_key
+        in envs.GPUSTACK_RUNTIME_DETECT_BACKEND_MAP_RESOURCE_KEY.values()
+    )
 
 
 def _is_device_plugin_resource(resource_key: str) -> bool:
@@ -1182,7 +1200,7 @@ class KubernetesDeployer(EndoscopicDeployer):
             self._node_name = node.metadata.name
         return node.status.allocatable or {}
 
-    _resource_injection_policy: Literal["env", "kdp"] | None = None
+    _resource_injection_policy: Literal["env", "kdp", "dra"] | None = None
     """Resolved policy on the deployment instance dedicated to one workload."""
 
     def _resolve_resource_injection_policy(self) -> str:
@@ -1404,6 +1422,45 @@ class KubernetesDeployer(EndoscopicDeployer):
 
         return service
 
+    def _create_dra_claim_template(
+        self,
+        workload: KubernetesWorkloadPlan,
+        pod_name: str,
+        count: int,
+    ) -> None:
+        """
+        Create the per-workload ResourceClaimTemplate asking for `count`
+        devices, whole topology domains for a multi-device request.
+        """
+        custom_api = kubernetes.client.CustomObjectsApi(self._client)
+        group_size = dra.resolve_group_size(custom_api, self._node_name)
+        body = dra.build_claim_template(
+            f"{pod_name}-gpu",
+            workload.namespace,
+            {**(workload.labels or {}), _LABEL_WORKLOAD: workload.name},
+            count,
+            group_size=group_size,
+        )
+        try:
+            with contextlib.suppress(kubernetes.client.exceptions.ApiException):
+                custom_api.delete_namespaced_custom_object(
+                    dra.DRA_GROUP,
+                    dra.DRA_VERSION,
+                    workload.namespace,
+                    "resourceclaimtemplates",
+                    body["metadata"]["name"],
+                )
+            custom_api.create_namespaced_custom_object(
+                dra.DRA_GROUP,
+                dra.DRA_VERSION,
+                workload.namespace,
+                "resourceclaimtemplates",
+                body,
+            )
+        except kubernetes.client.exceptions.ApiException as e:
+            msg = f"Failed to create resource claim template for workload {workload.name}{_detail_api_call_error(e)}"
+            raise OperationError(msg) from e
+
     def _create_pod(
         self,
         workload: KubernetesWorkloadPlan,
@@ -1513,7 +1570,11 @@ class KubernetesDeployer(EndoscopicDeployer):
 
         # Resolve the injection policy once per Pod: under "auto" it probes the
         # target node, and every container of the Pod lands on that same node.
-        kdp = self._resolve_resource_injection_policy() == "kdp"
+        policy = self._resolve_resource_injection_policy()
+        kdp = policy == "kdp"
+        dra = policy == "dra"
+        dra_count = 0
+        dra_claim_name = "gpu"
 
         cnt_init, cnt_run = -1, -1
         for ci, c in enumerate(workload.containers):
@@ -1550,7 +1611,7 @@ class KubernetesDeployer(EndoscopicDeployer):
                     run_as_user=c.execution.run_as_user,
                     run_as_group=c.execution.run_as_group,
                     read_only_root_filesystem=c.execution.readonly_rootfs,
-                    privileged=_resolve_privileged(c, kdp),
+                    privileged=_resolve_privileged(c, kdp or dra),
                     capabilities=(
                         kubernetes.client.V1Capabilities(
                             add=c.execution.capabilities.add,
@@ -1572,10 +1633,24 @@ class KubernetesDeployer(EndoscopicDeployer):
             if c.resources:
                 fmt = "kdp" if kdp else "plain"
 
+                dra_requested = False
                 resources: dict[str, str] = {}
                 for r_k, r_v in c.resources.items():
                     if r_k in ("cpu", "memory"):
                         resources[r_k] = str(r_v)
+                        continue
+
+                    if dra and _is_device_request_key(r_k):
+                        # DRA hands out devices by count; the claim is
+                        # attached after the containers are parameterized.
+                        if str(r_v).strip() == "all":
+                            msg = "DRA injection does not support requesting all devices"
+                            raise ValueError(msg)
+                        dra_container_count = len(
+                            [x for x in str(r_v).split(",") if x.strip()],
+                        )
+                        dra_count = max(dra_count, dra_container_count)
+                        dra_requested = True
                         continue
 
                     if (
@@ -1711,6 +1786,11 @@ class KubernetesDeployer(EndoscopicDeployer):
                 container.resources = kubernetes.client.V1ResourceRequirements(
                     limits=(resources if resources else None),
                     requests=(resources if resources else None),
+                    claims=(
+                        [kubernetes.client.V1ResourceClaim(name=dra_claim_name)]
+                        if dra_requested
+                        else None
+                    ),
                 )
 
             # Parameterize mounts
@@ -1774,8 +1854,20 @@ class KubernetesDeployer(EndoscopicDeployer):
 
         core_api = kubernetes.client.CoreV1Api(self._client)
         try:
+            if dra and dra_count:
+                self._create_dra_claim_template(
+                    workload,
+                    pod_name,
+                    dra_count,
+                )
+                pod.spec.resource_claims = [
+                    kubernetes.client.V1PodResourceClaim(
+                        name=dra_claim_name,
+                        resource_claim_template_name=f"{pod_name}-{dra_claim_name}",
+                    ),
+                ]
             _apply_instance_type_admission(pod, workload.instance_type)
-            _pin_pod_for_kueue(pod, self._node_name)
+            _pin_pod_for_kueue(pod, self._node_name, force=dra)
 
             _resolve_runtime_class_name(pod, self._client)
             pod = self._mutate_create_pod(pod)
@@ -1842,7 +1934,7 @@ class KubernetesDeployer(EndoscopicDeployer):
         self._runtime_uuid_values_allowed: bool | None = None
         self._deployment_lock = Lock()
         self._materials_cache: dict[str, dict[str, DevicesMaterial]] = {}
-        self._materials_locks = {policy: Lock() for policy in ("env", "kdp")}
+        self._materials_locks = {policy: Lock() for policy in ("env", "kdp", "dra")}
 
     def _prepare(self):
         """
@@ -1853,7 +1945,7 @@ class KubernetesDeployer(EndoscopicDeployer):
         policy = self._resolve_resource_injection_policy()
         with self._materials_locks[policy]:
             if policy not in self._materials_cache:
-                self._runtime_uuid_values_allowed = policy != "kdp"
+                self._runtime_uuid_values_allowed = policy == "env"
                 try:
                     super()._prepare()
                 except Exception:
@@ -1869,7 +1961,7 @@ class KubernetesDeployer(EndoscopicDeployer):
         # policy. Workloads with the same policy reuse the device materials.
         if self._runtime_uuid_values_allowed is None:
             self._runtime_uuid_values_allowed = (
-                self._resolve_resource_injection_policy() != "kdp"
+                self._resolve_resource_injection_policy() == "env"
             )
         return self._runtime_uuid_values_allowed
 
@@ -2214,7 +2306,7 @@ class KubernetesDeployer(EndoscopicDeployer):
             policy=workload.resource_injection_policy,
         )
         deployer._runtime_uuid_values_allowed = (
-            deployer._resource_injection_policy != "kdp"
+            deployer._resource_injection_policy == "env"
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Creating workload:\n%s", workload.to_yaml())
@@ -2406,6 +2498,29 @@ class KubernetesDeployer(EndoscopicDeployer):
         except Exception as e:
             msg = f"Failed to delete service of workload {name}{_detail_api_call_error(e)}"
             raise OperationError(msg) from e
+
+        # Remove all ResourceClaimTemplates with the workload label (DRA).
+        # Claims created from them are owned by the Pod and garbage collected.
+        try:
+            custom_api = kubernetes.client.CustomObjectsApi(self._client)
+            templates = custom_api.list_namespaced_custom_object(
+                dra.DRA_GROUP,
+                dra.DRA_VERSION,
+                namespace,
+                "resourceclaimtemplates",
+                label_selector=label_selector,
+            )
+            for t in templates.get("items", []):
+                custom_api.delete_namespaced_custom_object(
+                    dra.DRA_GROUP,
+                    dra.DRA_VERSION,
+                    namespace,
+                    "resourceclaimtemplates",
+                    t["metadata"]["name"],
+                )
+        except Exception:
+            # DRA may be absent or not permitted; never block the deletion.
+            debug_log_exception(logger, "Failed to delete resource claim templates")
 
         # Remove all ConfigMaps with the workload label.
         try:

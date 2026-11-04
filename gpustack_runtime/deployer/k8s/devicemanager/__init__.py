@@ -29,6 +29,11 @@ class KubernetesResourceInjectionPolicyEnum(str, Enum):
     """
     Request device-plugin resources.
     """
+    DRA = "DRA"
+    """
+    Request devices through Dynamic Resource Allocation (ResourceClaimTemplate).
+    Never chosen by Auto.
+    """
 
     @classmethod
     def _missing_(cls, value: object) -> KubernetesResourceInjectionPolicyEnum | None:
@@ -112,7 +117,7 @@ def get_resource_injection_policy(
     probe_node_allocatable: Callable[[], Mapping[str, Any] | None] | None = None,
     *,
     policy: KubernetesResourceInjectionPolicyEnum | None = None,
-) -> Literal["env", "kdp"]:
+) -> Literal["env", "kdp", "dra"]:
     """
     Get the resource injection policy (in lowercase) for the deployer.
 
@@ -156,6 +161,8 @@ def get_resource_injection_policy(
         return "env"
     if policy == KubernetesResourceInjectionPolicyEnum.KDP:
         return "kdp"
+    if policy == KubernetesResourceInjectionPolicyEnum.DRA:
+        return "dra"
 
     if probe_node_allocatable is None:
         return "kdp"

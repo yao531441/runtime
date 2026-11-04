@@ -315,10 +315,40 @@ if TYPE_CHECKING:
     """
     GPUSTACK_RUNTIME_KUBERNETES_RESOURCE_INJECTION_POLICY: str | None = None
     """
-    Resource injection policy for the Kubernetes deployer (e.g., Auto, Env, KDP).
+    Resource injection policy for the Kubernetes deployer (e.g., Auto, Env, KDP, DRA).
     `Auto`: Automatically choose the resource injection policy based on the environment.
     `Env`: Injects resources using standard environment variable, depends on underlying Container Toolkit, based on `GPUSTACK_RUNTIME_DEPLOY_RESOURCE_KEY_MAP_RUNTIME_VISIBLE_DEVICES`.
     `KDP`: Injects resources using Kubernetes Device Plugin.
+    `DRA`: Injects resources using Dynamic Resource Allocation (ResourceClaimTemplate), never chosen by Auto.
+    """
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_DEVICE_CLASS: str = "gpu.intel.com"
+    """
+    DeviceClass requested by the `DRA` resource injection policy.
+    """
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_DRIVER: str = "gpu.intel.com"
+    """
+    DRA driver name, to read ResourceSlices and allocations of.
+    """
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE: str | None = (
+        "resource.kubernetes.io/pcieRoot"
+    )
+    """
+    Device attribute of one topology domain. Multi-device claims take whole
+    domains only (matchAttribute per domain). Empty disables the constraint.
+    """
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_DOMAIN_SIZE: int | None = None
+    """
+    Devices per topology domain; derived from ResourceSlices when unset.
+    """
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_ALLOW_PARTIAL_DOMAIN: bool = False
+    """
+    Allow a device count that is not a multiple of the domain size.
+    """
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_PCI_ATTRIBUTE: str = (
+        "resource.kubernetes.io/pciBusID"
+    )
+    """
+    Device attribute carrying the PCI address, to map allocations to detected devices.
     """
     GPUSTACK_RUNTIME_KUBERNETES_KDP_NO_KUEUE_ADMISSION: bool = False
     """
@@ -735,6 +765,28 @@ variables: dict[str, Callable[[], Any]] = {
         ),
         options=["Auto", "Env", "KDP"],
         default="Auto",
+    ),
+    "GPUSTACK_RUNTIME_KUBERNETES_DRA_DEVICE_CLASS": lambda: getenv(
+        "GPUSTACK_RUNTIME_KUBERNETES_DRA_DEVICE_CLASS",
+        "gpu.intel.com",
+    ),
+    "GPUSTACK_RUNTIME_KUBERNETES_DRA_DRIVER": lambda: getenv(
+        "GPUSTACK_RUNTIME_KUBERNETES_DRA_DRIVER",
+        "gpu.intel.com",
+    ),
+    "GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE": lambda: getenv(
+        "GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE",
+        "resource.kubernetes.io/pcieRoot",
+    ),
+    "GPUSTACK_RUNTIME_KUBERNETES_DRA_DOMAIN_SIZE": lambda: to_int(
+        getenv("GPUSTACK_RUNTIME_KUBERNETES_DRA_DOMAIN_SIZE"),
+    ),
+    "GPUSTACK_RUNTIME_KUBERNETES_DRA_ALLOW_PARTIAL_DOMAIN": lambda: to_bool(
+        getenv("GPUSTACK_RUNTIME_KUBERNETES_DRA_ALLOW_PARTIAL_DOMAIN", "0"),
+    ),
+    "GPUSTACK_RUNTIME_KUBERNETES_DRA_PCI_ATTRIBUTE": lambda: getenv(
+        "GPUSTACK_RUNTIME_KUBERNETES_DRA_PCI_ATTRIBUTE",
+        "resource.kubernetes.io/pciBusID",
     ),
     "GPUSTACK_RUNTIME_KUBERNETES_KDP_NO_KUEUE_ADMISSION": lambda: to_bool(
         getenv(

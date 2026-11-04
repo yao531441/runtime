@@ -84,6 +84,16 @@ def _plan(policy=None, name="test", devices="all"):
     )
 
 
+_NON_DRA_POLICIES = [
+    p
+    for p in KubernetesResourceInjectionPolicyEnum
+    if p != KubernetesResourceInjectionPolicyEnum.DRA
+]
+"""
+DRA is covered by test_dra.py: it requests devices by count, not by device map.
+"""
+
+
 @pytest.fixture
 def cluster(monkeypatch):
     monkeypatch.setattr(KubernetesDeployer, "is_supported", staticmethod(lambda: True))
@@ -194,7 +204,7 @@ def test_policy_survives_serialization(policy):
     assert restored.resource_injection_policy == policy
 
 
-@pytest.mark.parametrize("policy", list(KubernetesResourceInjectionPolicyEnum))
+@pytest.mark.parametrize("policy", _NON_DRA_POLICIES)
 def test_enum_and_string_policies_create_equivalent_pods(cluster, policy):
     expected = "Env" if policy == KubernetesResourceInjectionPolicyEnum.ENV else "KDP"
     for name, value in (("enum", policy), ("string", policy.value)):
@@ -277,7 +287,7 @@ def test_failed_workload_does_not_change_next_workload_policy(cluster):
     _assert_pod(cluster.pods["model"], "KDP")
 
 
-@pytest.mark.parametrize("policy", list(KubernetesResourceInjectionPolicyEnum))
+@pytest.mark.parametrize("policy", _NON_DRA_POLICIES)
 @pytest.mark.parametrize("case", [str.lower, str.upper, str.swapcase])
 def test_policy_accepts_case_insensitive_strings(cluster, policy, case):
     plan = _plan(case(policy.value))
@@ -345,3 +355,99 @@ def test_workloads_share_default_node_and_remain_listable(cluster, monkeypatch):
         items=list(cluster.pods.values()),
     )
     assert {status.name for status in list_workloads()} == {"env", "kdp"}
+
+
+# --------------------------------------------------------------------------- #
+# DRA                                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def _slices(domains=4, per=2):
+    devices = []
+    for d in range(domains):
+        for i in range(per):
+            devices.append(
+                {
+                    "name": f"card-{d}-{i}",
+                    "attributes": {
+                        "resource.kubernetes.io/pcieRoot": {"string": f"pci{d}"},
+                    },
+                },
+            )
+    return {"items": [{"spec": {"devices": devices}}]}
+
+
+@pytest.fixture
+def dra_cluster(cluster, monkeypatch):
+    monkeypatch.setattr(
+        envs,
+        "GPUSTACK_RUNTIME_KUBERNETES_RESOURCE_INJECTION_POLICY",
+        "DRA",
+    )
+    custom = MagicMock()
+    custom.list_cluster_custom_object.return_value = _slices()
+    templates = {}
+
+    def create(group, version, namespace, plural, body):
+        templates[body["metadata"]["name"]] = body
+        return body
+
+    custom.create_namespaced_custom_object.side_effect = create
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", lambda _c: custom)
+    cluster.custom = custom
+    cluster.templates = templates
+    return cluster
+
+
+def _dra_plan(devices, name="test"):
+    return KubernetesWorkloadPlan(
+        name=name,
+        namespace="default",
+        containers=[
+            Container(
+                name="default",
+                image="example.com/cache:test",
+                execution=ContainerExecution(privileged=False),
+                resources=ContainerResources(
+                    **{"intel.com/devices": devices, "cpu": 2, "memory": "20Gi"},
+                ),
+            ),
+        ],
+    )
+
+
+def test_dra_pod_uses_claim_and_node_selector(dra_cluster):
+    create_workload(_dra_plan("0,1,2,3"))
+    pod = dra_cluster.pods["test"]
+    assert pod.spec.node_name is None
+    assert pod.spec.node_selector == {"kubernetes.io/hostname": "node-a"}
+    c = pod.spec.containers[0]
+    assert c.security_context.privileged is False
+    assert [x.name for x in c.resources.claims] == ["gpu"]
+    assert "intel.com/devices" not in (c.resources.limits or {})
+    assert not [e for e in c.env if e.name.endswith("VISIBLE_DEVICES")]
+    assert pod.spec.resource_claims[0].resource_claim_template_name == "test-gpu"
+    tpl = dra_cluster.templates["test-gpu"]
+    devs = tpl["spec"]["spec"]["devices"]
+    assert [r["exactly"]["count"] for r in devs["requests"]] == [2, 2]
+    assert [c["requests"] for c in devs["constraints"]] == [["gpu-0"], ["gpu-1"]]
+    assert devs["constraints"][0]["matchAttribute"] == (
+        "resource.kubernetes.io/pcieRoot"
+    )
+
+
+def test_dra_single_device_has_no_constraint(dra_cluster):
+    create_workload(_dra_plan("0"))
+    devs = dra_cluster.templates["test-gpu"]["spec"]["spec"]["devices"]
+    assert devs["requests"][0]["exactly"]["count"] == 1
+    assert "constraints" not in devs
+
+
+def test_dra_rejects_partial_domain(dra_cluster):
+    with pytest.raises(ValueError, match="whole domains"):
+        create_workload(_dra_plan("0,1,2"))
+
+
+def test_dra_rejects_all_devices(dra_cluster):
+    with pytest.raises(ValueError, match="all devices"):
+        create_workload(_dra_plan("all"))
