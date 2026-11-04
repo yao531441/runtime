@@ -59,6 +59,50 @@ def parse_prometheus_text(text: str) -> list[tuple[str, dict[str, str], float]]:
     return samples
 
 
+def _discover_xpumd_url(service: str, node_name: str) -> str | None:
+    """
+    Locate the xpumd Pod of this node through the EndpointSlices of
+    `<namespace>/<service>` (xpumd is not hostNetwork): the ready endpoint on
+    `node_name`. Needs `endpointslices` get/list permission.
+    """
+    import kubernetes  # noqa: PLC0415
+
+    namespace, _, name = service.partition("/")
+    try:
+        kubernetes.config.load_incluster_config()
+    except kubernetes.config.config_exception.ConfigException:
+        kubernetes.config.load_kube_config()
+    api = kubernetes.client.DiscoveryV1Api()
+    slices = api.list_namespaced_endpoint_slice(
+        namespace,
+        label_selector=f"kubernetes.io/service-name={name}",
+    )
+    for sl in slices.items:
+        port = next(
+            (p.port for p in (sl.ports or []) if p.name in (None, "http")),
+            8080,
+        )
+        for ep in sl.endpoints or []:
+            if ep.node_name == node_name and ep.addresses:
+                if ep.conditions and ep.conditions.ready is False:
+                    continue
+                return f"http://{ep.addresses[0]}:{port}/metrics"
+    return None
+
+
+def _xpumd_url() -> str | None:
+    if envs.GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL:
+        return envs.GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL
+    service = envs.GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_SERVICE
+    node = envs.GPUSTACK_RUNTIME_KUBERNETES_NODE_NAME
+    if service and node:
+        try:
+            return _discover_xpumd_url(service, node)
+        except Exception:
+            debug_log_exception(logger, "Failed to discover xpumd endpoint")
+    return None
+
+
 def _fetch(url: str) -> str:
     with urllib.request.urlopen(url, timeout=_XPUMD_FETCH_TIMEOUT) as resp:  # noqa: S310
         return resp.read().decode("utf-8", errors="ignore")
@@ -80,8 +124,8 @@ class IntelDetector(Detector):
         if envs.GPUSTACK_RUNTIME_DETECT.lower() not in ("auto", "intel"):
             logger.debug("Intel detection is disabled by environment variable")
             return False
-        if not envs.GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL:
-            logger.debug("Intel xpumd URL is not set")
+        if not _xpumd_url():
+            logger.debug("Intel xpumd endpoint is not available")
             return False
         try:
             return bool(IntelDetector._collect())
@@ -94,7 +138,10 @@ class IntelDetector(Detector):
         """
         Query xpumd and group the samples by `pci_bdf`.
         """
-        text = _fetch(envs.GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL)
+        url = _xpumd_url()
+        if not url:
+            return {}
+        text = _fetch(url)
         cards: dict[str, dict] = {}
         for name, labels, value in parse_prometheus_text(text):
             bdf = labels.get("pci_bdf")

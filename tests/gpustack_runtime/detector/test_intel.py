@@ -78,3 +78,27 @@ def test_external_allocated(det, monkeypatch):
     flags = {d.appendix["pci_bdf"]: d.appendix["external_allocated"] for d in devs}
     assert flags["0000:b0:00.0"] is True
     assert sum(flags.values()) == 1
+
+
+def test_discover_url_from_endpointslices(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    import kubernetes
+
+    ep = lambda node, ip: NS(  # noqa: E731
+        node_name=node,
+        addresses=[ip],
+        conditions=NS(ready=True),
+    )
+    sl = NS(
+        ports=[NS(name="http", port=8080)],
+        endpoints=[ep("n1", "10.0.0.1"), ep("n2", "10.0.0.2")],
+    )
+    api = NS(list_namespaced_endpoint_slice=lambda ns, label_selector: NS(items=[sl]))
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "DiscoveryV1Api", lambda: api)
+    assert (
+        intel._discover_xpumd_url("intel-xpumd/intel-xpumd", "n2")
+        == "http://10.0.0.2:8080/metrics"
+    )
+    assert intel._discover_xpumd_url("intel-xpumd/intel-xpumd", "n3") is None

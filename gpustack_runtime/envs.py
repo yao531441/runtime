@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     Metrics URL of the node-local Intel xpumd (e.g. http://10.0.0.1:8080/metrics),
     the data source of the Intel detector. The Intel detector is disabled if not set.
     """
+    GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_SERVICE: str | None = None
+    """
+    `<namespace>/<service>` of the xpumd Service, e.g. intel-xpumd/intel-xpumd.
+    When the URL is unset, the endpoint on `GPUSTACK_RUNTIME_KUBERNETES_NODE_NAME`
+    is discovered through the Service's EndpointSlices.
+    """
     GPUSTACK_RUNTIME_DETECT_INTEL_DRA_OCCUPANCY: bool = True
     """
     Mark Intel devices held by DRA claims of other users as
@@ -436,6 +442,9 @@ variables: dict[str, Callable[[], Any]] = {
     ),
     "GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL": lambda: getenv(
         "GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL",
+    ),
+    "GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_SERVICE": lambda: getenv(
+        "GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_SERVICE",
     ),
     "GPUSTACK_RUNTIME_DETECT_INTEL_DRA_OCCUPANCY": lambda: to_bool(
         getenv("GPUSTACK_RUNTIME_DETECT_INTEL_DRA_OCCUPANCY", "1"),
