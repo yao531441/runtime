@@ -77,3 +77,43 @@ def test_get_allocated_devices():
     }
     ret = dra.get_allocated_devices(custom, core, "ns", "pod", "node-a")
     assert [d["pci_bdf"] for d in ret] == ["0000:26:00.0", "0000:37:00.0"]
+
+
+def test_external_allocated_excludes_own_claims(monkeypatch):
+    from gpustack_runtime import envs
+
+    own = f"{envs.GPUSTACK_RUNTIME_DEPLOY_LABEL_PREFIX}/workload"
+
+    def alloc(device, labels=None):
+        return {
+            "metadata": {"labels": labels or {}},
+            "status": {
+                "allocation": {
+                    "devices": {
+                        "results": [{"driver": "gpu.intel.com", "device": device}],
+                    },
+                },
+            },
+        }
+
+    custom = MagicMock()
+    attr = "resource.kubernetes.io/pciBusID"
+
+    def lister(group, version, plural, **kw):
+        if plural == "resourceclaims":
+            return {"items": [alloc("a"), alloc("b", {own: "w"})]}
+        return {
+            "items": [
+                {
+                    "spec": {
+                        "devices": [
+                            {"name": "a", "attributes": {attr: {"string": "A"}}},
+                            {"name": "b", "attributes": {attr: {"string": "B"}}},
+                        ],
+                    },
+                },
+            ],
+        }
+
+    custom.list_cluster_custom_object.side_effect = lister
+    assert dra.get_external_allocated_bdfs(custom, "node-a") == {"A"}

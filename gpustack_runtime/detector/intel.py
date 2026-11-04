@@ -217,7 +217,43 @@ class IntelDetector(Detector):
         except Exception:
             debug_log_exception(logger, "Failed to process Intel devices usage")
             raise
-        return merge_devices_usage(devices, usages)
+        merged = merge_devices_usage(devices, usages)
+        self._mark_external_allocated(merged)
+        return merged
+
+    @staticmethod
+    def _external_allocated_bdfs() -> set[str]:
+        """
+        Cards held by other users' DRA claims on this node; empty when DRA
+        occupancy is disabled, no node name is configured or the API fails.
+        """
+        node = envs.GPUSTACK_RUNTIME_KUBERNETES_NODE_NAME
+        if not envs.GPUSTACK_RUNTIME_DETECT_INTEL_DRA_OCCUPANCY or not node:
+            return set()
+        try:
+            import kubernetes  # noqa: PLC0415
+
+            from ..deployer.k8s import dra  # noqa: PLC0415
+
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.config_exception.ConfigException:
+                kubernetes.config.load_kube_config()
+            api = kubernetes.client.CustomObjectsApi()
+            return dra.get_external_allocated_bdfs(api, node)
+        except Exception:
+            debug_log_exception(logger, "Failed to read DRA occupancy")
+            return set()
+
+    def _mark_external_allocated(self, devices: Devices | None) -> None:
+        if not devices:
+            return
+        held = self._external_allocated_bdfs()
+        for dev in devices:
+            dev.appendix = dev.appendix or {}
+            dev.appendix["external_allocated"] = (
+                dev.appendix.get("pci_bdf") in held
+            )
 
     def get_topology(self, devices: Devices | None = None) -> Topology | None:
         """

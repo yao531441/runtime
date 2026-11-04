@@ -66,3 +66,15 @@ def test_detect_usage(det):
     assert 90 < d.memory_utilization < 91
     assert d.temperature == 31
     assert d.cores_utilization == 0
+
+
+def test_external_allocated(det, monkeypatch):
+    monkeypatch.setattr(
+        IntelDetector,
+        "_external_allocated_bdfs",
+        staticmethod(lambda: {"0000:b0:00.0"}),
+    )
+    devs = det.detect_usage()
+    flags = {d.appendix["pci_bdf"]: d.appendix["external_allocated"] for d in devs}
+    assert flags["0000:b0:00.0"] is True
+    assert sum(flags.values()) == 1

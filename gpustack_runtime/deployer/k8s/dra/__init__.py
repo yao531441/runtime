@@ -219,3 +219,52 @@ def get_allocated_devices(
                 bdf = _attr_value((dev.get("attributes") or {}).get(bdf_attr, {}))
                 ret.append({"name": dev["name"], "pci_bdf": bdf})
     return sorted(ret, key=lambda d: str(d["pci_bdf"]))
+
+
+def get_external_allocated_bdfs(
+    custom_api: kubernetes.client.CustomObjectsApi,
+    node_name: str,
+    driver: str | None = None,
+) -> set[str]:
+    """
+    PCI addresses of the node's devices DRA allocated to claims that do not
+    belong to this runtime (claims without the workload label), i.e. cards
+    other users hold. Read-only.
+    """
+    driver = driver or envs.GPUSTACK_RUNTIME_KUBERNETES_DRA_DRIVER
+    own_label = f"{envs.GPUSTACK_RUNTIME_DEPLOY_LABEL_PREFIX}/workload"
+    claims = custom_api.list_cluster_custom_object(
+        DRA_GROUP,
+        DRA_VERSION,
+        "resourceclaims",
+    )
+    names: set[str] = set()
+    for claim in claims.get("items", []):
+        if own_label in (claim.get("metadata", {}).get("labels") or {}):
+            continue
+        results = (
+            (claim.get("status") or {}).get("allocation", {}).get("devices", {})
+        ).get("results", [])
+        names.update(
+            r["device"]
+            for r in results
+            if r.get("driver") == driver
+            and (r.get("pool") in (None, node_name) or node_name in str(r.get("pool")))
+        )
+    if not names:
+        return set()
+    slices = custom_api.list_cluster_custom_object(
+        DRA_GROUP,
+        DRA_VERSION,
+        "resourceslices",
+        field_selector=f"spec.nodeName={node_name},spec.driver={driver}",
+    )
+    bdf_attr = envs.GPUSTACK_RUNTIME_KUBERNETES_DRA_PCI_ATTRIBUTE
+    ret = set()
+    for item in slices.get("items", []):
+        for dev in item.get("spec", {}).get("devices", []) or []:
+            if dev["name"] in names:
+                bdf = _attr_value((dev.get("attributes") or {}).get(bdf_attr, {}))
+                if bdf:
+                    ret.add(str(bdf))
+    return ret
