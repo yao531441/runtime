@@ -49,6 +49,10 @@ class ManufacturerEnum(str, Enum):
     """
     Shanghai Iluvatar CoreX Semiconductor Co., Ltd.
     """
+    INTEL = "intel"
+    """
+    Intel Corporation
+    """
     METAX = "metax"
     """
     MetaX Integrated Circuits (Shanghai) Co., Ltd.
@@ -80,6 +84,7 @@ _MANUFACTURER_BACKEND_MAPPING: dict[ManufacturerEnum, str] = {
     ManufacturerEnum.CAMBRICON: "neuware",
     ManufacturerEnum.HYGON: "dtk",
     ManufacturerEnum.ILUVATAR: "corex",
+    ManufacturerEnum.INTEL: "oneapi",
     ManufacturerEnum.METAX: "maca",
     ManufacturerEnum.MTHREADS: "musa",
     ManufacturerEnum.NVIDIA: "cuda",

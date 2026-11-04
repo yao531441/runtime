@@ -32,7 +32,12 @@ if TYPE_CHECKING:
     ## Detector
     GPUSTACK_RUNTIME_DETECT: str | None = None
     """
-    Detector to use (options: Auto, AMD, ASCEND, CAMBRICON, HYGON, ILUVATAR, METAX, MTHREADS, NVIDIA).
+    Detector to use (options: Auto, AMD, ASCEND, CAMBRICON, HYGON, ILUVATAR, INTEL, METAX, MTHREADS, NVIDIA).
+    """
+    GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL: str | None = None
+    """
+    Metrics URL of the node-local Intel xpumd (e.g. http://10.0.0.1:8080/metrics),
+    the data source of the Intel detector. The Intel detector is disabled if not set.
     """
     GPUSTACK_RUNTIME_DETECT_NO_PCI_CHECK: bool = False
     """
@@ -394,6 +399,9 @@ variables: dict[str, Callable[[], Any]] = {
         "GPUSTACK_RUNTIME_DETECT",
         "Auto",
     ),
+    "GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL": lambda: getenv(
+        "GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL",
+    ),
     "GPUSTACK_RUNTIME_DETECT_NO_PCI_CHECK": lambda: ternary(
         lambda: getenv("GPUSTACK_RUNTIME_DETECT_NO_PCI_CHECK") is not None,
         lambda: to_bool(getenv("GPUSTACK_RUNTIME_DETECT_NO_PCI_CHECK")),
@@ -432,6 +440,7 @@ variables: dict[str, Callable[[], Any]] = {
             "neuware=cambricon.com/devices;"
             "dtk=hygon.com/devices;"
             "corex=iluvatar.ai/devices;"
+            "oneapi=intel.com/devices;"
             "maca=metax-tech.com/devices;"
             "musa=mthreads.com/devices;"
             "cuda=nvidia.com/devices;"
