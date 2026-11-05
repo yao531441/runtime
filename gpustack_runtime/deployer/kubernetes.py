@@ -710,7 +710,11 @@ def _resolve_runtime_class_name(
     pod.spec.runtime_class_name = runtime_class_name
 
 
-def _resolve_privileged(container: Container, kdp: bool) -> bool:
+def _resolve_privileged(
+    container: Container,
+    kdp: bool,
+    dra: bool = False,
+) -> bool:
     """
     Resolve whether a container runs privileged.
 
@@ -731,6 +735,10 @@ def _resolve_privileged(container: Container, kdp: bool) -> bool:
         kdp:
             Whether the KDP injection policy is in effect, resolved once per
             Pod so a workload's containers cannot disagree on it.
+        dra:
+            Whether the DRA injection policy is in effect. Under DRA every
+            device request key is satisfied by a ResourceClaim, so privilege
+            is always dropped for those.
 
     """
     if not container.execution or not container.execution.privileged:
@@ -741,7 +749,7 @@ def _resolve_privileged(container: Container, kdp: bool) -> bool:
     for r_k in container.resources:
         if r_k in ("cpu", "memory"):
             continue
-        if _is_device_plugin_resource(r_k) or (
+        if _is_device_plugin_resource(r_k) or (dra and _is_device_request_key(r_k)) or (
             kdp
             and (
                 r_k
@@ -1611,7 +1619,7 @@ class KubernetesDeployer(EndoscopicDeployer):
                     run_as_user=c.execution.run_as_user,
                     run_as_group=c.execution.run_as_group,
                     read_only_root_filesystem=c.execution.readonly_rootfs,
-                    privileged=_resolve_privileged(c, kdp or dra),
+                    privileged=_resolve_privileged(c, kdp, dra),
                     capabilities=(
                         kubernetes.client.V1Capabilities(
                             add=c.execution.capabilities.add,

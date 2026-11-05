@@ -131,3 +131,13 @@ def _container(privileged: bool | None, resources: dict | None = None) -> Contai
 def test_resolve_privileged(name, privileged, resources, policy, expected):
     actual = _resolve_privileged(_container(privileged, resources), policy == "kdp")
     assert actual == expected, f"case {name} expected {expected}, but got {actual}"
+
+
+def test_resolve_privileged_dra_drops_for_backend_key():
+    # "intel.com/devices" is a backend resource key, not a visible-devices map key.
+    c = _container(True, {"intel.com/devices": "1"})
+    assert _resolve_privileged(c, False, True) is False
+    # Without DRA the key is untouched, so privilege stays.
+    assert _resolve_privileged(c, False, False) is True
+    # Non-device resources never drop privilege.
+    assert _resolve_privileged(_container(True, {"foo.io/bar": "1"}), False, True) is True
