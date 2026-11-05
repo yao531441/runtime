@@ -249,6 +249,8 @@ def get_external_allocated_bdfs(
             r["device"]
             for r in results
             if r.get("driver") == driver
+            # adminAccess results (e.g. monitoring) do not consume the device.
+            and not r.get("adminAccess")
             and (r.get("pool") in (None, node_name) or node_name in str(r.get("pool")))
         )
     if not names:

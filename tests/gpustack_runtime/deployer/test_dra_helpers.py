@@ -84,13 +84,16 @@ def test_external_allocated_excludes_own_claims(monkeypatch):
 
     own = f"{envs.GPUSTACK_RUNTIME_DEPLOY_LABEL_PREFIX}/workload"
 
-    def alloc(device, labels=None):
+    def alloc(device, labels=None, admin=False):
+        result = {"driver": "gpu.intel.com", "device": device}
+        if admin:
+            result["adminAccess"] = True
         return {
             "metadata": {"labels": labels or {}},
             "status": {
                 "allocation": {
                     "devices": {
-                        "results": [{"driver": "gpu.intel.com", "device": device}],
+                        "results": [result],
                     },
                 },
             },
@@ -101,7 +104,7 @@ def test_external_allocated_excludes_own_claims(monkeypatch):
 
     def lister(group, version, plural, **kw):
         if plural == "resourceclaims":
-            return {"items": [alloc("a"), alloc("b", {own: "w"})]}
+            return {"items": [alloc("a"), alloc("b", {own: "w"}), alloc("c", admin=True)]}
         return {
             "items": [
                 {
@@ -109,6 +112,7 @@ def test_external_allocated_excludes_own_claims(monkeypatch):
                         "devices": [
                             {"name": "a", "attributes": {attr: {"string": "A"}}},
                             {"name": "b", "attributes": {attr: {"string": "B"}}},
+                            {"name": "c", "attributes": {attr: {"string": "C"}}},
                         ],
                     },
                 },
