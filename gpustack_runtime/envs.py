@@ -340,12 +340,11 @@ if TYPE_CHECKING:
     """
     DRA driver name, to read ResourceSlices and allocations of.
     """
-    GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE: str | None = (
-        "resource.kubernetes.io/pcieRoot"
-    )
+    GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE: str | None = None
     """
-    Device attribute of one topology domain. Multi-device claims take whole
-    domains only (matchAttribute per domain). Empty disables the constraint.
+    Device attribute of one topology domain, e.g. "resource.kubernetes.io/pcieRoot".
+    When set, multi-device claims take whole domains only (matchAttribute per
+    domain). Unset (default) adds no topology constraint, only a device count.
     """
     GPUSTACK_RUNTIME_KUBERNETES_DRA_DOMAIN_SIZE: int | None = None
     """
@@ -793,8 +792,8 @@ variables: dict[str, Callable[[], Any]] = {
     ),
     "GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE": lambda: getenv(
         "GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE",
-        "resource.kubernetes.io/pcieRoot",
-    ),
+    )
+    or None,
     "GPUSTACK_RUNTIME_KUBERNETES_DRA_DOMAIN_SIZE": lambda: to_int(
         getenv("GPUSTACK_RUNTIME_KUBERNETES_DRA_DOMAIN_SIZE"),
     ),

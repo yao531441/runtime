@@ -444,3 +444,21 @@ def test_pull_diagnosis_overrides_pod_status_message():
 
     assert "some generic pod message" not in status.state_message
     assert "ImagePullBackOff" in status.state_message
+
+
+def test_unschedulable_pending_pod_reports_scheduler_reason():
+    pod = _pod("Pending")
+    pod.status.conditions = [
+        kubernetes.client.V1PodCondition(
+            type="PodScheduled",
+            status="False",
+            reason="Unschedulable",
+            message="0/5 nodes are available: 1 cannot allocate all claims.",
+        ),
+    ]
+
+    status = KubernetesWorkloadStatus(name="test", k_pod=pod, core_api=None)
+
+    assert status.state == WorkloadStatusStateEnum.PENDING
+    assert "Unschedulable" in status.state_message
+    assert "cannot allocate all claims" in status.state_message

@@ -535,6 +535,20 @@ class KubernetesWorkloadStatus(WorkloadStatus):
             # admission rejection ("UnexpectedAdmissionError: Allocate
             # failed ...") on Failed Pods.
             self.state_message = k_pod.status.message
+        elif k_pod.status.phase == "Pending":
+            # A Pod the scheduler cannot place (e.g. a DRA claim that cannot
+            # be allocated: "cannot allocate all claims") would otherwise
+            # look like it is still starting. Surface the scheduler's reason.
+            for cond in k_pod.status.conditions or []:
+                if (
+                    cond.type == "PodScheduled"
+                    and cond.status == "False"
+                    and (cond.message or cond.reason)
+                ):
+                    self.state_message = ": ".join(
+                        p for p in [cond.reason, cond.message] if p
+                    )
+                    break
 
 
 _NAME = "kubernetes"

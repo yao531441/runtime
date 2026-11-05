@@ -384,6 +384,12 @@ def dra_cluster(cluster, monkeypatch):
         "GPUSTACK_RUNTIME_KUBERNETES_RESOURCE_INJECTION_POLICY",
         "DRA",
     )
+    # Whole-domain allocation is opt-in; the default adds no topology constraint.
+    monkeypatch.setattr(
+        envs,
+        "GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE",
+        "resource.kubernetes.io/pcieRoot",
+    )
     custom = MagicMock()
     custom.list_cluster_custom_object.return_value = _slices()
     templates = {}
@@ -451,3 +457,16 @@ def test_dra_rejects_partial_domain(dra_cluster):
 def test_dra_rejects_all_devices(dra_cluster):
     with pytest.raises(ValueError, match="all devices"):
         create_workload(_dra_plan("all"))
+
+
+def test_dra_default_has_no_topology_constraint(dra_cluster, monkeypatch):
+    monkeypatch.setattr(
+        envs,
+        "GPUSTACK_RUNTIME_KUBERNETES_DRA_TOPOLOGY_ATTRIBUTE",
+        None,
+    )
+    create_workload(_dra_plan("0,1,2"))
+    body = next(iter(dra_cluster.templates.values()))
+    devs = body["spec"]["spec"]["devices"]
+    assert [r["exactly"]["count"] for r in devs["requests"]] == [3]
+    assert "constraints" not in devs
