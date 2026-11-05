@@ -780,7 +780,7 @@ variables: dict[str, Callable[[], Any]] = {
         getenv(
             "GPUSTACK_RUNTIME_KUBERNETES_RESOURCE_INJECTION_POLICY",
         ),
-        options=["Auto", "Env", "KDP"],
+        options=["Auto", "Env", "KDP", "DRA"],
         default="Auto",
     ),
     "GPUSTACK_RUNTIME_KUBERNETES_DRA_DEVICE_CLASS": lambda: getenv(

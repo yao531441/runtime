@@ -121,3 +121,13 @@ def test_external_allocated_excludes_own_claims(monkeypatch):
 
     custom.list_cluster_custom_object.side_effect = lister
     assert dra.get_external_allocated_bdfs(custom, "node-a") == {"A"}
+
+
+def test_env_accepts_dra_injection_policy(monkeypatch):
+    # "DRA" used to be missing from the accepted options and silently fell back to "Auto".
+    from gpustack_runtime import envs
+    from gpustack_runtime.deployer.k8s.devicemanager import get_resource_injection_policy
+
+    monkeypatch.setenv("GPUSTACK_RUNTIME_KUBERNETES_RESOURCE_INJECTION_POLICY", "DRA")
+    assert envs.GPUSTACK_RUNTIME_KUBERNETES_RESOURCE_INJECTION_POLICY == "DRA"
+    assert get_resource_injection_policy(lambda: None) == "dra"
