@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     ## Detector
     GPUSTACK_RUNTIME_DETECT: str | None = None
     """
-    Detector to use (options: Auto, AMD, ASCEND, CAMBRICON, HYGON, ILUVATAR, METAX, MTHREADS, NVIDIA).
+    Detector to use (options: Auto, AMD, ASCEND, CAMBRICON, HYGON, ILUVATAR, INTEL, METAX, MTHREADS, NVIDIA).
     """
     GPUSTACK_RUNTIME_DETECT_NO_PCI_CHECK: bool = False
     """
@@ -432,6 +432,7 @@ variables: dict[str, Callable[[], Any]] = {
             "neuware=cambricon.com/devices;"
             "dtk=hygon.com/devices;"
             "corex=iluvatar.ai/devices;"
+            "oneapi=intel.com/devices;"
             "maca=metax-tech.com/devices;"
             "musa=mthreads.com/devices;"
             "cuda=nvidia.com/devices;"
@@ -564,6 +565,7 @@ variables: dict[str, Callable[[], Any]] = {
             "cambricon.com/devices=cambricon.com/mlu;"
             "hygon.com/devices=hygon.com/dcu;"
             "iluvatar.ai/devices=iluvatar.com/gpu;"
+            "intel.com/devices=intel.com/gpu;"
             "metax-tech.com/devices=metax-tech.com/gpu;"
             "mthreads.com/devices=mthreads.com/gpu;"
             "nvidia.com/devices=nvidia.com/gpu;"
@@ -589,6 +591,7 @@ variables: dict[str, Callable[[], Any]] = {
             "cambricon.com/devices=CAMBRICON_VISIBLE_DEVICES;"
             "hygon.com/devices=HYGON_VISIBLE_DEVICES;"
             "iluvatar.ai/devices=IX_VISIBLE_DEVICES;"
+            "intel.com/devices=INTEL_VISIBLE_DEVICES;"
             "metax-tech.com/devices=CUDA_VISIBLE_DEVICES;"
             "mthreads.com/devices=METHERDS_VISIBLE_DEVICES;"
             "nvidia.com/devices=NVIDIA_VISIBLE_DEVICES;"
@@ -603,6 +606,7 @@ variables: dict[str, Callable[[], Any]] = {
             "cambricon.com/devices=MLU_VISIBLE_DEVICES;"
             "hygon.com/devices=HIP_VISIBLE_DEVICES;"
             "iluvatar.ai/devices=CUDA_VISIBLE_DEVICES;"
+            "intel.com/devices=ZE_AFFINITY_MASK;"
             "metax-tech.com/devices=CUDA_VISIBLE_DEVICES;"
             "mthreads.com/devices=CUDA_VISIBLE_DEVICES,MUSA_VISIBLE_DEVICES;"
             "nvidia.com/devices=CUDA_VISIBLE_DEVICES;"
@@ -613,14 +617,14 @@ variables: dict[str, Callable[[], Any]] = {
     "GPUSTACK_RUNTIME_DEPLOY_RUNTIME_VISIBLE_DEVICES_VALUE_UUID": lambda: to_set(
         getenv(
             "GPUSTACK_RUNTIME_DEPLOY_RUNTIME_VISIBLE_DEVICES_VALUE_UUID",
-            "NVIDIA_VISIBLE_DEVICES",
+            "NVIDIA_VISIBLE_DEVICES,INTEL_VISIBLE_DEVICES",
         ),
         sep=",",
     ),
     "GPUSTACK_RUNTIME_DEPLOY_BACKEND_VISIBLE_DEVICES_VALUE_ALIGNMENT": lambda: to_set(
         getenv(
             "GPUSTACK_RUNTIME_DEPLOY_BACKEND_VISIBLE_DEVICES_VALUE_ALIGNMENT",
-            "ASCEND_RT_VISIBLE_DEVICES,NPU_VISIBLE_DEVICES",
+            "ASCEND_RT_VISIBLE_DEVICES,NPU_VISIBLE_DEVICES,ZE_AFFINITY_MASK",
         ),
         sep=",",
     ),

@@ -21,6 +21,7 @@ from .ascend import AscendDetector
 from .cambricon import CambriconDetector
 from .hygon import HygonDetector
 from .iluvatar import IluvatarDetector
+from .intel import IntelDetector
 from .metax import MetaXDetector
 from .mthreads import MThreadsDetector
 from .nvidia import NVIDIADetector
@@ -34,6 +35,7 @@ _DETECTORS: list[Detector] = [
     CambriconDetector(),
     HygonDetector(),
     IluvatarDetector(),
+    IntelDetector(),
     MetaXDetector(),
     MThreadsDetector(),
     NVIDIADetector(),
