@@ -3,6 +3,7 @@ from __future__ import annotations as __future_annotations__
 import csv
 import json
 import logging
+import re
 import shutil
 import subprocess
 from functools import lru_cache
@@ -47,7 +48,71 @@ def bdf_to_cdi_uid(bdf: str, pci_device_id: str) -> str:
     Intel GPU resource driver), e.g. `0000:2b:00.0` + `0xe211` ->
     `0000-2b-00-0-0xe211`.
     """
-    return f"{bdf.replace(':', '-').replace('.', '-')}-{pci_device_id}"
+    return f"{bdf.replace(':', '-').replace('.', '-')}-{pci_device_id.lower()}"
+
+
+_BDF = re.compile(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$", re.IGNORECASE)
+# SoC UUID reported by xpu-smi, e.g. 00000000-0000-002b-0000-0000e2118086:
+# the third group holds the PCI bus, the last one `<device id><vendor id>`.
+_SOC_UUID = re.compile(
+    r"^0{8}-0{4}-00([0-9a-f]{2})-0{4}-0000([0-9a-f]{4})8086$",
+    re.IGNORECASE,
+)
+
+
+def _resolve_bdf(dev: dict) -> str | None:
+    """
+    Resolve the PCI BDF of a discovered device.
+
+    xpu-smi 1.x reports it directly; xpu-smi 2.x inside a container reports
+    `0000:00:00.0` (sysfs is not the host's), so fall back to the SoC UUID.
+    """
+    bdf = str(dev.get("pci_bdf_address") or "")
+    if _BDF.match(bdf) and bdf != "0000:00:00.0":
+        return bdf.lower()
+    m = _SOC_UUID.match(str(dev.get("uuid") or ""))
+    if m:
+        return f"0000:{m.group(1).lower()}:00.0"
+    return None
+
+
+def _parse_dump(text: str) -> list[dict[str, str]]:
+    rows = [r for r in csv.reader(text.splitlines()) if r]
+    header = next(
+        (i for i, r in enumerate(rows) if r[0].strip().startswith("Timestamp")),
+        None,
+    )
+    if header is None:
+        return []
+    names = [c.strip() for c in rows[header]]
+    return [
+        dict(zip(names, (c.strip() for c in r), strict=False))
+        for r in rows[header + 1 :]
+    ]
+
+
+def _dump_all() -> list[dict[str, str]]:
+    """
+    Dump usage metrics of all devices. Supports both CLI generations:
+    xpu-smi 2.x (`--metrics MEMORY,...`) and 1.x (numeric `-m` ids).
+    """
+    try:
+        rows = _parse_dump(
+            _run_xpu_smi(
+                "dump",
+                "-d",
+                "-1",
+                "--metrics",
+                "MEMORY,UTILIZATION,POWER,TEMPERATURE",
+                "--number",
+                "1",
+            ),
+        )
+        if rows:
+            return rows
+    except Exception:
+        debug_log_exception(logger, "xpu-smi dump (2.x syntax) failed")
+    return _parse_dump(_run_xpu_smi("dump", "-d", "-1", "-m", "0,1,3,18", "-n", "1"))
 
 
 def collect_from_xpu_smi() -> dict[str, dict]:
@@ -60,17 +125,20 @@ def collect_from_xpu_smi() -> dict[str, dict]:
     cards: dict[str, dict] = {}
     by_id: dict[int, str] = {}
     for dev in listing:
-        if dev.get("device_type") not in (None, "GPU"):
+        if dev.get("device_type") not in (None, "GPU", "Discrete GPU"):
             continue
         if dev.get("device_function_type") not in (None, "physical"):
             continue
-        bdf = dev["pci_bdf_address"]
+        bdf = _resolve_bdf(dev)
+        if bdf is None or not re.match(r"^0x[0-9a-f]{4}$", dev.get("pci_device_id", ""), re.IGNORECASE):
+            logger.debug("Skip xpu-smi device without valid identity: %s", dev)
+            continue
         by_id[int(dev["device_id"])] = bdf
         card = cards.setdefault(bdf, {"bdf": bdf})
         card["name"] = dev.get("device_name")
         card["vendor"] = dev.get("vendor_name")
         card["driver_version"] = dev.get("driver_version")
-        card["uid"] = bdf_to_cdi_uid(bdf, dev.get("pci_device_id", ""))
+        card["uid"] = bdf_to_cdi_uid(bdf, dev["pci_device_id"])
         try:
             detail = json.loads(
                 _run_xpu_smi("discovery", "-d", str(dev["device_id"]), "-j"),
@@ -81,33 +149,39 @@ def collect_from_xpu_smi() -> dict[str, dict]:
         except Exception:
             debug_log_exception(logger, "Failed to query xpu-smi device detail")
     try:
-        text = _run_xpu_smi("dump", "-d", "-1", "-m", "0,1,3,18", "-n", "1")
-        rows = [r for r in csv.reader(text.splitlines()) if r]
-        header = next(
-            (i for i, r in enumerate(rows) if r[0].strip().startswith("Timestamp")),
-            None,
-        )
-        if header is not None:
-            names = [c.strip() for c in rows[header]]
-            for r in rows[header + 1 :]:
-                vals = dict(zip(names, (c.strip() for c in r), strict=False))
+        for vals in _dump_all():
+            try:
                 bdf = by_id.get(int(vals.get("DeviceId", "-1")))
-                if bdf is None:
+            except ValueError:
+                continue
+            if bdf is None:
+                continue
+            card = cards[bdf]
+            for k, v in vals.items():
+                try:
+                    f = float(v)
+                except ValueError:
                     continue
-                card = cards[bdf]
-                for k, v in vals.items():
-                    try:
-                        f = float(v)
-                    except ValueError:
-                        continue
-                    if k.startswith("Average % utilization"):
-                        card["util"] = f / 100
-                    elif k.startswith("GPU Memory Used"):
-                        card["mem_used"] = f * 1024 * 1024
-                    elif k.startswith("GPU Power"):
-                        card["power"] = f
-                    elif k.startswith("GPU Core Temperature"):
-                        card["temp"] = f
+                # xpu-smi 1.x columns
+                if k.startswith("Average % utilization"):
+                    card["util"] = f / 100
+                elif k.startswith("GPU Memory Used"):
+                    card["mem_used"] = f * 1024 * 1024
+                elif k.startswith("GPU Power"):
+                    card["power"] = f
+                elif k.startswith("GPU Core Temperature"):
+                    card["temp"] = f
+                # xpu-smi 2.x columns
+                elif k == "utilization.gpu (%)":
+                    card["util"] = f / 100
+                elif k == "memory.used (MiB)":
+                    card["mem_used"] = f * 1024 * 1024
+                elif k == "memory.total (MiB)":
+                    card.setdefault("mem_total", f * 1024 * 1024)
+                elif k == "power.draw (W)":
+                    card["power"] = f
+                elif k == "temperature.gpu (C)":
+                    card["temp"] = f
     except Exception:
         debug_log_exception(logger, "Failed to query xpu-smi usage")
     return cards
