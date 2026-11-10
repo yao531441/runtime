@@ -52,7 +52,7 @@ def test_detect_info(det):
     assert bdfs == sorted(bdfs)
     d = next(x for x in devs if x.appendix["pci_bdf"] == "0000:b0:00.0")
     assert d.manufacturer == ManufacturerEnum.INTEL
-    assert d.uuid == "868011e2-0000-0000-b000-000000000000"
+    assert d.uuid == "0000-b0-00-0-0xe211"
     assert "B60" in d.name
     assert d.memory == 24480  # 25669140480 B
     # reset_needed is exposed with value 0 in the sample: still healthy.

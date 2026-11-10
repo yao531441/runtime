@@ -103,6 +103,21 @@ def _xpumd_url() -> str | None:
     return None
 
 
+def _device_uid(card: dict) -> str:
+    """
+    Device UID as named by the Intel CDI specs (`intel.com/gpu`), i.e.
+    `<domain>-<bus>-<device>-<function>-<pci device id>`, e.g.
+    `0000-2b-00-0-0xe211`; it lets the same name be used for the CDI
+    device request. Falls back to the xpumd `hw_id`, then the BDF.
+    """
+    bdf = card["bdf"]
+    dev_id = (card.get("info") or {}).get("pci_device_id")
+    if dev_id and re.fullmatch(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", bdf):
+        dev_id = dev_id.lower().removeprefix("0x")
+        return f"{bdf.replace(':', '-').replace('.', '-')}-0x{dev_id}"
+    return card.get("hw_id") or bdf
+
+
 def _fetch(url: str) -> str:
     with urllib.request.urlopen(url, timeout=_XPUMD_FETCH_TIMEOUT) as resp:  # noqa: S310
         return resp.read().decode("utf-8", errors="ignore")
@@ -219,7 +234,7 @@ class IntelDetector(Detector):
                         manufacturer=self.manufacturer,
                         index=idx,
                         name=info.get("hw_model") or info.get("hw_name") or "Intel XPU",
-                        uuid=card.get("hw_id") or bdf,
+                        uuid=_device_uid(card),
                         driver_version=info.get("hw_driver_version"),
                         memory=byte_to_mebibyte(int(card.get("mem_total", 0))),
                         memory_status=self._status(card),
@@ -252,7 +267,7 @@ class IntelDetector(Detector):
                 used = byte_to_mebibyte(int(card.get("mem_used", 0)))
                 usages.append(
                     Device(
-                        uuid=card.get("hw_id") or card["bdf"],
+                        uuid=_device_uid(card),
                         cores_utilization=card.get("util", 0) * 100,
                         memory_used=used,
                         memory_utilization=get_utilization(used, total),
