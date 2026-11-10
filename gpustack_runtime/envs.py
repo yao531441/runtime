@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_URL: str | None = None
     """
     Metrics URL of the node-local Intel xpumd (e.g. http://10.0.0.1:8080/metrics),
-    the data source of the Intel detector. If unset, the detector falls back to the `xpu-smi` CLI (bare-metal / Docker).
+    the data source of the Intel detector. The Intel detector is disabled if not set.
     """
     GPUSTACK_RUNTIME_DETECT_INTEL_XPUMD_SERVICE: str | None = None
     """
